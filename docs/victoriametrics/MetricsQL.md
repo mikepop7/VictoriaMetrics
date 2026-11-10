@@ -124,8 +124,7 @@ The list of MetricsQL features on top of PromQL:
 * `default` binary operator. `q1 default q2` fills gaps in `q1` with the corresponding values from `q2`. See also [drop_empty_series](#drop_empty_series).
 * `if` binary operator. `q1 if q2` removes values from `q1` for missing values from `q2`.
 * `ifnot` binary operator. `q1 ifnot q2` removes values from `q1` for existing values from `q2`.
-* `WITH` templates. This feature simplifies writing and managing complex queries.
-  Go to [WITH templates playground](https://play.victoriametrics.com/select/0/prometheus/graph/#/expand-with-exprs) and try it.
+* `WITH` templates. This feature simplifies writing and managing complex queries. See [these docs](#with-templates), or try it in the [WITH templates playground](https://play.victoriametrics.com/select/0/prometheus/graph/#/expand-with-exprs).
 * String literals may be concatenated. This is useful with `WITH` templates:
   `WITH (commonPrefix="long_metric_prefix_") {__name__=commonPrefix+"suffix1"} / {__name__=commonPrefix+"suffix2"}`.
 * `keep_metric_names` modifier can be applied to all the [rollup functions](#rollup-functions), [transform functions](#transform-functions)
@@ -143,6 +142,87 @@ For example:
 
 * `rate({__name__=~"foo|bar"}) keep_metric_names` leaves `foo` and `bar` metric names in the returned time series.
 * `({__name__=~"foo|bar"} / 10) keep_metric_names` leaves `foo` and `bar` metric names in the returned time series.
+
+## WITH templates
+
+`WITH` templates allow you to set a name to a part of a query and reuse it in the rest of the query. These templates can be used as macros. See [function templates](#function-templates-macros).
+Templates are expanded before the query is executed. The query returns the same results as its expanded form.
+Use the [WITH templates playground](https://play.victoriametrics.com/select/0/prometheus/graph/#/expand-with-exprs)
+to see how a query expands. It also contains a step-by-step tutorial.
+
+### Named expressions and filters
+
+#### Query expression
+
+```metricsql
+WITH (
+    cpuSeconds = node_cpu_seconds_total{job="node"}
+)
+sum(rate(cpuSeconds{mode="idle"}[5m]))
+```
+
+#### Label filters
+
+Use them inside the curly braces of a series selector, alone or together with other filters:
+
+```metricsql
+WITH (
+    commonFilters = {job="api", env="prod"}
+)
+http_requests_total{commonFilters, code=~"5.."} / http_requests_total{commonFilters}
+```
+
+#### String
+
+Join strings with `+` to build metric names:
+
+```metricsql
+WITH (
+    prefix = "long_metric_prefix_"
+)
+{__name__=prefix+"suffix1"} / {__name__=prefix+"suffix2"}
+```
+
+### Function templates (macros)
+
+Define a template with arguments as `name(arg1, arg2, ...) = expression`, then call it like a regular function.
+Each call is replaced with the template body, and each argument with the expression passed in the call.
+An argument can be any expression, including a set of label filters.
+A template can only call templates defined before it:
+
+```metricsql
+WITH (
+    rate5m(m) = rate(m[5m]),
+    errorRatio(job) = sum(rate5m(http_requests_total{job=job, code=~"5.."}))
+                    / sum(rate5m(http_requests_total{job=job}))
+)
+errorRatio("api")
+```
+
+The query above expands to:
+
+```metricsql
+sum(rate(http_requests_total{job="api",code=~"5.."}[5m])) / sum(rate(http_requests_total{job="api"}[5m]))
+```
+
+`WITH` templates can be nested. A template body, a function argument or any part of a query can contain its own `WITH (...)`.
+
+### Built-in function templates
+
+Available in every query without defining them:
+
+* `ru(free, max)` - resource utilization in percent. It is calculated as `(max - free) / max * 100` with negative values clamped to zero.
+* `ttf(free)` - estimated time in seconds until `free` reaches zero, if it keeps decreasing at the rate returned by [deriv_fast](#deriv_fast).
+  The result is smoothed with [smooth_exponential](#smooth_exponential) and capped at one year.
+* `range_median(q)` - shorthand for `range_quantile(0.5, q)`. See [range_quantile](#range_quantile).
+* `alias(q, name)` - sets the metric name for `q` results. Shorthand for `label_set(q, "__name__", name)`. See [label_set](#label_set).
+
+### Template scope
+
+A template only works inside the query where it is defined.
+If you use the [VictoriaMetrics datasource for Grafana](https://github.com/VictoriaMetrics/victoriametrics-datasource),
+you can define templates once per dashboard and use them in every panel of that dashboard.
+See [how to use WITH templates in Grafana](https://github.com/VictoriaMetrics/victoriametrics-datasource#how-to-use-with-templates).
 
 ## MetricsQL functions
 
